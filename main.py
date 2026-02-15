@@ -1,8 +1,14 @@
+#!/usr/bin/env python3
 import os
 import sys
 import shutil
 import subprocess
 import warnings
+import threading
+import time
+import json
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
 warnings.filterwarnings('ignore')
 
 
@@ -150,6 +156,75 @@ def run_complete_pipeline(skip_collection=False, coins=None, interval='5m',
     return True
 
 
+# ---------------------------
+# Dummy HTTP server for Render
+# ---------------------------
+class DummyHandler(BaseHTTPRequestHandler):
+    server_start_time = time.time()
+
+    def _set_json(self, status=200):
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+
+    def _set_html(self, status=200):
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+
+    def do_GET(self):
+        if self.path in ("/health", "/healthz"):
+            # minimal health check
+            self._set_json(200)
+            payload = {
+                "status": "ok",
+                "uptime_seconds": int(time.time() - self.server_start_time)
+            }
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
+        elif self.path == "/":
+            self._set_html(200)
+            body = f"""
+                <html>
+                <head><title>Universal Trainer</title></head>
+                <body>
+                  <h1>Universal Trainer</h1>
+                  <p>status: running</p>
+                  <p>uptime_seconds: {int(time.time() - self.server_start_time)}</p>
+                  <p>env PORT: {os.getenv('PORT')}</p>
+                </body>
+                </html>
+            """
+            self.wfile.write(body.encode("utf-8"))
+        else:
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"Not Found")
+
+    def log_message(self, format, *args):
+        # reduce noisy logs; print minimal
+        sys.stdout.write("%s - - [%s] %s\n" %
+                         (self.client_address[0],
+                          self.log_date_time_string(),
+                          format % args))
+
+
+def start_dummy_server_in_thread(port: int):
+    """
+    Starts a simple HTTP server in a background thread.
+    Returns (server, thread) so caller can join/shutdown if desired.
+    """
+    try:
+        server = HTTPServer(("0.0.0.0", port), DummyHandler)
+    except OSError as e:
+        print(f"⚠️ Failed to start dummy server on port {port}: {e}")
+        return None, None
+
+    thread = threading.Thread(target=server.serve_forever, name="DummyHTTPServer", daemon=False)
+    thread.start()
+    print(f"🔌 Dummy HTTP server started on 0.0.0.0:{port} (thread {thread.name})")
+    return server, thread
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description='Universal pipeline runner (saves & optionally pushes model)')
@@ -166,9 +241,19 @@ if __name__ == "__main__":
     parser.add_argument('--push', action='store_true', help='Push model file to repo using GIT_TOKEN env var')
     args = parser.parse_args()
 
+    # Convert coins to standard symbols
     coins = None
     if args.coins:
         coins = [c.upper() + 'USDT' if not c.upper().endswith('USDT') else c.upper() for c in args.coins]
+
+    # Start dummy server early so render health checks can see it during run.
+    port_env = os.getenv("PORT")
+    try:
+        port = int(port_env) if port_env else 10000
+    except ValueError:
+        port = 10000
+
+    dummy_server, dummy_thread = start_dummy_server_in_thread(port)
 
     success = run_complete_pipeline(skip_collection=args.skip_collection,
                                     coins=coins,
@@ -182,6 +267,14 @@ if __name__ == "__main__":
                                     calibrate=args.calibrate)
     if not success:
         print("❌ Pipeline failed or cancelled.")
+        # optional: keep server up to allow debug access; we'll exit with non-zero code
+        # shutdown server cleanly if running
+        if dummy_server:
+            try:
+                dummy_server.shutdown()
+                dummy_server.server_close()
+            except Exception:
+                pass
         sys.exit(1)
 
     # Trainer should have saved universal_scalp_model.pkl; copy to universal_model.pkl for convenience
@@ -211,13 +304,54 @@ if __name__ == "__main__":
     if args.push:
         if not os.path.exists(public_model):
             print(f"⚠️ {public_model} not found; nothing to push.")
+            # shutdown dummy server before exit
+            if dummy_server:
+                try:
+                    dummy_server.shutdown()
+                    dummy_server.server_close()
+                except Exception:
+                    pass
             sys.exit(1)
         pushed = push_model_to_github(public_model)
         if not pushed:
             print("⚠️ Model not pushed. You can push manually from CI or locally.")
+            if dummy_server:
+                try:
+                    dummy_server.shutdown()
+                    dummy_server.server_close()
+                except Exception:
+                    pass
             sys.exit(1)
         else:
             print("✅ Model push complete.")
 
     print("✅ Pipeline completed successfully.")
-    sys.exit(0)
+
+    # If the environment requests the process to keep alive (useful for Render),
+    # set KEEP_ALIVE=true in env. Otherwise script exits (and Render will stop the service).
+    keep_alive = os.getenv("KEEP_ALIVE", "false").lower() == "true"
+    if keep_alive and dummy_thread and dummy_thread.is_alive():
+        try:
+            print("🛑 KEEP_ALIVE=true — keeping process alive (press Ctrl+C to stop).")
+            # Block here until interrupted; server runs in dummy_thread
+            while True:
+                time.sleep(3600)
+        except KeyboardInterrupt:
+            print("🔌 Shutdown requested, stopping dummy server...")
+        finally:
+            try:
+                dummy_server.shutdown()
+                dummy_server.server_close()
+            except Exception:
+                pass
+            print("✅ Dummy server stopped. Exiting.")
+            sys.exit(0)
+    else:
+        # shutdown server cleanly if it was started (avoid lingering resources)
+        if dummy_server:
+            try:
+                dummy_server.shutdown()
+                dummy_server.server_close()
+            except Exception:
+                pass
+        sys.exit(0)
