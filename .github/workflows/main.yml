@@ -64,7 +64,7 @@ jobs:
           set -euo pipefail
           echo "Starting training pipeline..."
           # keep the run verbose so logs show what happened
-          python3 main.py --push
+          python main.py --skip-collection --push
 
       - name: Upload model artifacts (backup)
         if: always()
@@ -83,4 +83,4 @@ jobs:
 
       - name: Fail marker
         if: failure()
-        run: echo "Training workflow finished with errors. Check logs above."
+        keep: echo "Training workflow finished with errors. Check logs above."
