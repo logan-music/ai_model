@@ -63,7 +63,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "Starting training pipeline..."
-          # keep the run verbose so logs show what happened
+        
           python main.py --skip-collection --push
 
       - name: Upload model artifacts (backup)
