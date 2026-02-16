@@ -1,39 +1,86 @@
-name: Train Universal Model
+name: Weekly Train & Publish Model
 
+# Runs weekly + manual trigger
 on:
-  workflow_dispatch:
   schedule:
-    - cron: '0 0 * * 0'  # Every Sunday
+    # weekly on Sunday 00:00 UTC  (adjust cron if you want different time)
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+
+concurrency:
+  group: train-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write    # not strictly required if pushing with personal token, but safe to set
 
 jobs:
   train:
     runs-on: ubuntu-latest
+    timeout-minutes: 240
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Run training pipeline
+      - name: Show Python & pip
+        run: |
+          python -V
+          pip -V
+
+      - name: Run training pipeline (non-interactive)
         env:
-          AUTO_APPROVE: true
+          # REQUIRED secrets (set these under Repo → Settings → Secrets and variables → Actions)
           BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
           BINANCE_API_SECRET: ${{ secrets.BINANCE_API_SECRET }}
+          # Push token: must have 'repo' scope to push model file back to repo
+          GIT_TOKEN: ${{ secrets.GIT_TOKEN }}
+          # Optional: override commit author
+          GIT_USER_NAME: ${{ secrets.GIT_USER_NAME || 'Render Trainer' }}
+          GIT_USER_EMAIL: ${{ secrets.GIT_USER_EMAIL || 'render@example.com' }}
+          # important: run non-interactively (main.py checks AUTO_APPROVE)
+          AUTO_APPROVE: 'true'
         run: |
-          python main.py --push
+          set -euo pipefail
+          echo "Starting training pipeline..."
+          # keep the run verbose so logs show what happened
+          python3 main.py --push
 
-      - name: Commit trained model
-        run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "actions@github.com"
-          git add .
-          git commit -m "Auto update trained model" || echo "No changes"
-          git push
+      - name: Upload model artifacts (backup)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: universal-model-artifacts
+          path: |
+            universal_model.pkl
+            universal_scalp_model.pkl
+            universal_scalp_scaler.pkl
+            universal_features.pkl
+
+      - name: Done
+        if: success()
+        run: echo "Training workflow completed successfully."
+
+      - name: Fail marker
+        if: failure()
+        run: echo "Training workflow finished with errors. Check logs above."
