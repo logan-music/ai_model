@@ -53,7 +53,7 @@ jobs:
       - name: Download latest dataset from Render
         run: |
           echo "Downloading universal_features.csv from Render..."
-          curl -L https://YOUR-APP.onrender.com/download -o universal_features.csv
+          curl -L https://test-6m8o.onrender.com/download -o universal_features.csv
           
           if [ ! -f universal_features.csv ]; then
             echo "❌ Download failed!"
