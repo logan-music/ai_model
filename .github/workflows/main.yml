@@ -3,7 +3,6 @@ name: Universal Model Training
 # Runs weekly + manual trigger
 on:
   schedule:
-    # weekly on Sunday 00:00 UTC (badilisha muda ukitaka)
     - cron: '0 0 * * 0'
   workflow_dispatch:
 
@@ -50,13 +49,19 @@ jobs:
           python -V
           pip -V
 
-      - name: Verify features file exists
+      # 🔥 NEW STEP: Download dataset from Render
+      - name: Download latest dataset from Render
         run: |
+          echo "Downloading universal_features.csv from Render..."
+          curl -L https://YOUR-APP.onrender.com/download -o universal_features.csv
+          
           if [ ! -f universal_features.csv ]; then
-            echo "❌ universal_features.csv not found!"
+            echo "❌ Download failed!"
             exit 1
           fi
-          echo "✅ universal_features.csv found."
+          
+          echo "✅ universal_features.csv downloaded successfully."
+          ls -lh universal_features.csv
 
       - name: Run training pipeline (non-interactive)
         env:
