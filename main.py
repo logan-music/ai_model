@@ -90,7 +90,7 @@ def push_model_to_github(model_filename="universal_model.pkl"):
 
 
 def run_complete_pipeline(skip_collection=False, coins=None, interval='5m',
-                          lookback_days=120, fee=0.1, profit=0.6, lookforward=6,
+                          lookback_days=120, fee=0.1, profit=0.6, lookforward=16,
                           stoploss=1.0, slippage=0.05, calibrate=False):
     """
     Orchestrates collection + training.
@@ -159,7 +159,7 @@ if __name__ == "__main__":
     parser.add_argument('--days', type=int, default=120)
     parser.add_argument('--fee', type=float, default=0.1)
     parser.add_argument('--profit', type=float, default=0.6)
-    parser.add_argument('--lookforward', type=int, default=6)
+    parser.add_argument('--lookforward', type=int, default=16)
     parser.add_argument('--stoploss', type=float, default=1.0)
     parser.add_argument('--slippage', type=float, default=0.05)
     parser.add_argument('--calibrate', action='store_true')
